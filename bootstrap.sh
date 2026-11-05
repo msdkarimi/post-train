@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-WITH_VLLM="${WITH_VLLM:1}"
-WITH_TRAIN="${WITH_TRAIN:1}"
-WITH_CAUSAL_CONV1D="${WITH_CAUSAL_CONV1D:1}"
+WITH_VLLM="${WITH_VLLM:-1}"
+WITH_TRAIN="${WITH_TRAIN:-1}"
+WITH_CAUSAL_CONV1D="${WITH_CAUSAL_CONV1D:-1}"
 VENV_DIR="${VENV_DIR:-$HOME/venv}"
 TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"  # must match driver CUDA (12.8)
 REPO_URL="${REPO_URL:-https://github.com/msdkarimi/post-train.git}"   # public repo: no credentials needed
