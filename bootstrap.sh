@@ -21,10 +21,10 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 # --- 2. System packages + Docker ---------------------------------------------
 log "System packages + Docker"
 if ! command -v docker >/dev/null 2>&1; then
-  sudo apt-get update -y
-  sudo apt-get install -y docker.io git tmux htop build-essential curl
+  sudo apt-get -o DPkg::Lock::Timeout=600 update -y
+  sudo apt-get -o DPkg::Lock::Timeout=600 install -y docker.io git tmux htop build-essential curl
 else
-  sudo apt-get install -y git tmux htop build-essential curl >/dev/null
+  sudo apt-get -o DPkg::Lock::Timeout=600 install -y git tmux htop build-essential curl >/dev/null
 fi
 sudo systemctl enable --now docker >/dev/null 2>&1 || true
 # Takes effect on next login; the script itself uses sudo for docker.
@@ -45,8 +45,20 @@ source "$VENV_DIR/bin/activate"
 
 # torch FIRST, from the cu128 index, so nothing later pulls a newer CUDA build.
 uv pip install torch --index-url "$TORCH_INDEX"
+
+# vLLM goes BEFORE everything else on purpose: it pins its own torch version and may replace
+# the one above. Installing it first means the torch we pin below, and the CUDA extensions we
+# compile against it (causal-conv1d), all match the FINAL torch. --torch-backend=cu128 keeps
+# any replacement torch on the CUDA 12.8 build that matches the driver.
+if [ "$WITH_VLLM" = "1" ]; then
+  log "vLLM (may replace torch; --torch-backend keeps it on cu128)"
+  uv pip install --torch-backend=cu128 vllm || echo "vLLM install failed; continue without it"
+fi
+
+# Pin whatever torch is installed NOW so no later install can change it.
 TORCH_VER="$(python -c 'import torch; print(torch.__version__.split("+")[0])')"
-printf 'torch==%s*\n' "$TORCH_VER" > /tmp/torch-constraint.txt
+printf 'torch==%s\n' "$TORCH_VER" > /tmp/torch-constraint.txt   # matches 2.x.y+cu128 too (local label ignored)
+echo "torch pinned to $TORCH_VER"
 
 uv pip install -c /tmp/torch-constraint.txt \
   transformers accelerate flash-linear-attention
@@ -57,19 +69,23 @@ uv pip install -c /tmp/torch-constraint.txt \
 # transformers falls back to the slower reference code. Disable with WITH_CAUSAL_CONV1D=0.
 if [ "$WITH_CAUSAL_CONV1D" = "1" ]; then
   log "causal-conv1d (optional)"
-  uv pip install -c /tmp/torch-constraint.txt packaging ninja wheel setuptools
-  MAX_JOBS="${MAX_JOBS:-8}" uv pip install -c /tmp/torch-constraint.txt \
-    --no-build-isolation causal-conv1d \
-    || echo "causal-conv1d install failed - continuing with the slower fallback kernel"
+  # Its setup script needs to find the CUDA toolkit even when a prebuilt wheel exists.
+  if [ -z "${CUDA_HOME:-}" ] && ! command -v nvcc >/dev/null 2>&1 && [ -d /usr/local/cuda ]; then
+    export CUDA_HOME=/usr/local/cuda
+    export PATH="$CUDA_HOME/bin:$PATH"
+  fi
+  if command -v nvcc >/dev/null 2>&1 || [ -n "${CUDA_HOME:-}" ]; then
+    uv pip install -c /tmp/torch-constraint.txt packaging ninja wheel setuptools
+    MAX_JOBS="${MAX_JOBS:-8}" uv pip install -c /tmp/torch-constraint.txt \
+      --no-build-isolation causal-conv1d \
+      || echo "causal-conv1d install failed - continuing with the slower fallback kernel"
+  else
+    echo "no CUDA toolkit (nvcc) found - skipping causal-conv1d (slower fallback kernel is used)"
+  fi
 fi
 
 if [ "$WITH_TRAIN" = "1" ]; then
   uv pip install -c /tmp/torch-constraint.txt trl peft datasets wandb huggingface_hub
-fi
-
-if [ "$WITH_VLLM" = "1" ]; then
-  log "vLLM (may replace torch; --torch-backend keeps it on cu128)"
-  uv pip install --torch-backend=cu128 vllm || echo "vLLM install failed; continue without it"
 fi
 
 # --- 5a. Clone / update the (public) repo ---------------------------------------
@@ -126,7 +142,10 @@ if [ -n "$ENV_FILE" ]; then
   for k in HF_TOKEN WANDB_API_KEY; do
     if [ -n "${!k:-}" ]; then echo "  $k: set"; else echo "  $k: MISSING in $ENV_FILE"; fi
   done
-  [ -n "${HF_TOKEN:-}" ] && python -c "from huggingface_hub import login; import os; login(os.environ['HF_TOKEN'])" 2>/dev/null || echo "login to HF failed!"
+  if [ -n "${HF_TOKEN:-}" ]; then
+    python -c "from huggingface_hub import login; import os; login(os.environ['HF_TOKEN'])" 2>/dev/null \
+      || echo "login to HF failed!"
+  fi
 else
   echo "No .env found (looked in $REPO_DIR, $SCRIPT_DIR, $PWD, $HOME)."
   echo "Copy one with: scp .env <vm>:$REPO_DIR/.env   (gated models/datasets and W&B need it)"
