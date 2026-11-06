@@ -220,3 +220,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 
+
+# Project artifacts (never commit: large, regenerable, or private)
+data/
+outputs/
+wandb/

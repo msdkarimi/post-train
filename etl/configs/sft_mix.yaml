@@ -1,0 +1,34 @@
+# SFT data mix. Edit sources / caps here; re-run:  python -m etl.build_sft --config etl/configs/sft_mix.yaml
+name: sft_v1
+tokenizer: Qwen/Qwen3.5-2B-Base
+max_seq_len: 4096          # examples longer than this are dropped (never truncated: truncation would cut <|im_end|>)
+val_fraction: 0.02
+seed: 42
+
+sources:
+  # Tool use / function calling (target skill). ~9k conversations before expansion into per-turn examples.
+  - name: hermes_fc
+    adapter: hermes
+    params:
+      configs: [func_calling_singleturn, func_calling, glaive_func_calling]
+    expand_turns: true       # one training example per user query in multi-turn conversations
+    max_expansions: 4
+
+  # General chat + instruction following, mixed in to limit forgetting.
+  - name: smoltalk_general
+    adapter: smoltalk
+    params:
+      subsets:
+        smol-magpie-ultra: 3000
+        smol-constraints: 2000
+        everyday-conversations: 1000
+        systemchats-30k: 1000
+    expand_turns: true
+    max_expansions: 2
+
+  # Your own teacher-distilled sandbox trajectories (canonical JSONL). Enable once the file exists.
+  # - name: sandbox_distilled
+  #   adapter: local_jsonl
+  #   params:
+  #     paths: [data/raw/sandbox_trajectories.jsonl]
+  #   expand_turns: false

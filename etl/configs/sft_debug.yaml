@@ -1,0 +1,23 @@
+# Tiny, short-sequence dataset for pipeline checks on a laptop (the 248k-token vocab makes logits huge,
+# so sequences are capped at 512 tokens). Build:  python -m etl.build_sft --config etl/configs/sft_debug.yaml
+name: debug
+tokenizer: Qwen/Qwen3.5-2B-Base
+max_seq_len: 512
+val_fraction: 0.05
+seed: 42
+
+sources:
+  - name: hermes_fc
+    adapter: hermes
+    params:
+      configs: [glaive_func_calling]
+      max_examples: 150
+    expand_turns: true
+    max_expansions: 2
+  - name: smoltalk_general
+    adapter: smoltalk
+    params:
+      subsets:
+        everyday-conversations: 60
+    expand_turns: true
+    max_expansions: 1
